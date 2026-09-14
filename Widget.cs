@@ -39,7 +39,6 @@ class Widget : Form
     Status? last;
     TimeSpan weekWorked;
     string? warn, error;
-    int? idleLimit = History.LoadLimit();
     bool idleWarned, wasRunning, warned, doneAlerted, expanded, dragged, settingsOpen;
     DateTime alertDay;
     DateTime? offAlertAt;
@@ -144,6 +143,8 @@ class Widget : Form
                 logId = (int?)x.Element("TimeLogId");
                 minutes = (int?)x.Element("Minutes") ?? 0;
             }
+            var running = IsRunning(persist, now);
+            minutes = Calc.LiveMinutes(minutes, running, IdleNow());
 
             var logs = ReadLogs(userId, now.Date.AddDays(-7));
             var history = History.Load();
@@ -152,7 +153,7 @@ class Widget : Form
                 changed |= History.Merge(history, Calc.Summarize(g.ToList(), logId, minutes));
             if (changed) History.Save(history);
 
-            last = Calc.Compute(logs.Where(l => l.Start.Date == now.Date).ToList(), logId, minutes, IsRunning(persist, now), now, settings.Daily());
+            last = Calc.Compute(logs.Where(l => l.Start.Date == now.Date).ToList(), logId, minutes, running, now, settings.Daily());
             weekWorked = Calc.WeekWorked(history.Values, Calc.Monday(now));
             error = null;
             tray.Text = $"Today {Calc.Hm(last.Worked)}/{Calc.Hm(settings.Daily())} · Week {Calc.Hm(weekWorked)}/{Calc.Hm(WeekRequired())} · Idle {Calc.Hm(last.Idle)}";
@@ -193,13 +194,6 @@ class Widget : Form
         var running = IsRunning(persist, now);
         var idle = IdleNow();
 
-        if (wasRunning && !running && Calc.LearnLimit(persist!.LastWriteTime, now - idle) is int lim)
-        {
-            idleLimit = lim;
-            History.SaveLimit(lim);
-            tray.ShowBalloonTip(10_000, $"Tracker stopped after ~{lim} min idle",
-                $"From now on I'll warn you at {(int)Calc.WarnAt(lim).TotalMinutes} min of no activity. Restart the tracker when you're back.", ToolTipIcon.Info);
-        }
         if (running != wasRunning) { wasRunning = running; Refresh_(); }
 
         // Working but the tracker is off: you're at the keyboard, today's target isn't met, the tracker isn't running.
@@ -213,12 +207,12 @@ class Widget : Form
             tray.ShowBalloonTip(8_000, "Time Tracker is off", "You're working but the tracker isn't running. Start it so this time counts.", ToolTipIcon.Warning);
         }
 
-        var warnAt = Calc.WarnAt(idleLimit);
+        var warnAt = Calc.WarnAt;
         string? w = null;
         if (settings.IdleWarning && running && idle >= warnAt)
         {
-            var left = idleLimit is int m ? TimeSpan.FromMinutes(m) - idle : (TimeSpan?)null;
-            w = $"⚠ No input {Ms(idle)}" + (left is null ? "" : left > TimeSpan.Zero ? $" · stops in ~{Ms(left.Value)}" : " · stopping…");
+            var left = Calc.IdleLimit - idle;
+            w = $"⚠ No input {Ms(idle)}" + (left > TimeSpan.Zero ? $" · stops in ~{Ms(left)}" : " · stopping…");
             if (!idleWarned)
             {
                 idleWarned = true;

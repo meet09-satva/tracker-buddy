@@ -16,7 +16,8 @@ Companion widget for Satva Time Tracker 2.7. Read-only: never writes to the trac
 
 ## Rules (refresh every 30 s)
 - **Running** = newest Persistance file written within the last 2 min.
-- **Worked** = Σ today's logs of `max(End − Start, Minutes if log is the persisted one)`.
+- **Worked** = Σ today's logs of `max(End − Start, Minutes if log is the persisted one)`. While running, whole minutes
+  of current no-input are taken off `Minutes`: on idle stop the tracker sets `End = Start + (seconds − idle seconds)`.
 - **Left** = max(0, daily − Worked). **Finish at** = now + Left (keeps moving while stopped).
 - **Idle** = (now − first start today) − Worked, i.e. every gap when the tracker was off.
 - **Week** = Σ history rows Mon–Sun vs. this week's required hours (daily target stays fixed).
@@ -24,14 +25,14 @@ Companion widget for Satva Time Tracker 2.7. Read-only: never writes to the trac
 
 ## Live checks (every 5 s)
 - **Idle warning**: while running and no input ≥ warn point → sound + notification (once per idle stretch), widget
-  turns red "⚠ No input m:ss · stops in ~m:ss". Warn point = learned limit − 2 min (min 1), or 3 min until learned.
-- **Learning**: running → stopped with last persist write ≥ 1 min after last input → limit = ceil(gap) minutes;
-  latest wins. Stored in `idle-limit.txt` (delete to re-learn).
+  turns red "⚠ No input m:ss · stops in ~m:ss". Warn point = 8 min; the tracker's idle limit is hard-coded
+  to 10 min (`GetIdleTime() > 600000`) and the whole idle stretch is removed from the log.
 - **Tracker off**: not running, input within 30 s, today's target not met → sound + notification; repeats every 10 min.
 
 ## Weekly view
 - `history.csv` (`date,first_start,last_stop,worked_min,idle_min`), upserted every refresh from the last 7 days in
-  the DB. A day is only replaced by a bigger Worked, so a tracker DB wipe never shrinks it.
+  the DB. The DB replaces a day while it still has that day's first log (so
+  idle corrections flow in); if the first log is gone (DB wiped) only a bigger Worked replaces it.
 - Calendar icon / right-click → Week view: Mon–Sun, ± vs daily target, week total vs required and time left.
 
 ## UI

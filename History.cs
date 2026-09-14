@@ -7,7 +7,6 @@ static class History
 {
     public static readonly string Dir =Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TrackerBuddy");
     static readonly string CsvPath = Path.Combine(Dir, "history.csv");
-    static readonly string LimitPath = Path.Combine(Dir, "idle-limit.txt");
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
     public static Dictionary<DateTime, Day> Load()
@@ -33,20 +32,12 @@ static class History
         File.WriteAllLines(CsvPath, lines.Prepend("date,first_start,last_stop,worked_min,idle_min"));
     }
 
-    // Keeps the bigger day so a DB wipe never shrinks history. Returns true if something changed.
+    // The DB is the truth while it still has the day's first log (it may correct minutes down, e.g. idle removed).
+    // Once that log is gone the DB was wiped, so only a bigger day replaces ours. Returns true if something changed.
     public static bool Merge(Dictionary<DateTime, Day> days, Day d)
     {
-        if (days.TryGetValue(d.Date, out var old) && (old == d || old.Worked > d.Worked)) return false;
+        if (days.TryGetValue(d.Date, out var old) && (old == d || (d.First > old.First && old.Worked > d.Worked))) return false;
         days[d.Date] = d;
         return true;
-    }
-
-    public static int? LoadLimit() =>
-        File.Exists(LimitPath) && int.TryParse(File.ReadAllText(LimitPath).Trim(), out var m) ? m : null;
-
-    public static void SaveLimit(int minutes)
-    {
-        Directory.CreateDirectory(Dir);
-        File.WriteAllText(LimitPath, minutes.ToString(Inv));
     }
 }

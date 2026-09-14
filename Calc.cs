@@ -52,16 +52,14 @@ static class Calc
     public static TimeSpan WeekWorked(IEnumerable<Day> days, DateTime monday) =>
         days.Where(d => d.Date >= monday && d.Date < monday.AddDays(7)).Aggregate(TimeSpan.Zero, (sum, d) => sum + d.Worked);
 
-    // Tracker stopped with no input since lastInput; its last persist write is just before the stop.
-    // A manual stop needs a click, so input is recent and nothing is learned.
-    // ponytail: can read 1 min low when the write interval (~63 s) straddles the stop; errs toward warning early
-    public static int? LearnLimit(DateTime lastPersistWrite, DateTime lastInput)
-    {
-        var gap = lastPersistWrite - lastInput;
-        return gap >= TimeSpan.FromMinutes(1) ? (int)Math.Ceiling(gap.TotalMinutes) : null;
-    }
+    // Tracker 2.7 hard-codes this (DashBoard.Idle_Timer_Tick: GetIdleTime() > 600000).
+    public static readonly TimeSpan IdleLimit = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan WarnAt = IdleLimit - TimeSpan.FromMinutes(2);
 
-    public static TimeSpan WarnAt(int? limitMinutes) => TimeSpan.FromMinutes(limitMinutes is int m ? Math.Max(1, m - 2) : 3);
+    // On idle stop the tracker ends the log where idle began, so the persist minutes counted during idle are dropped.
+    // Leave them out while running; they come back if input returns before the limit.
+    public static int LiveMinutes(int persistMinutes, bool running, TimeSpan idle) =>
+        running ? Math.Max(0, persistMinutes - (int)idle.TotalMinutes) : persistMinutes;
 
     public static string Hm(TimeSpan t) => $"{(int)t.TotalHours}:{t.Minutes:00}";
 
@@ -85,10 +83,11 @@ static class Calc
         var day = Summarize(today, 3, 39);
         Check(day.First == T(10, 3) && day.Last == T(11, 43) && day.Worked == Min(70) && day.Idle == Min(30), "summary");
 
-        // History never shrinks when the tracker wipes its DB
+        // DB rows win while the day's first log is still there; a wipe (first log gone) never shrinks history
         var h = new Dictionary<DateTime, Day>();
         Check(History.Merge(h, day), "merge new");
-        Check(!History.Merge(h, day with { Worked = Min(10) }) && h[day.Date].Worked == Min(70), "merge keeps larger");
+        Check(History.Merge(h, day with { Worked = Min(65) }) && h[day.Date].Worked == Min(65), "merge takes db correction");
+        Check(!History.Merge(h, day with { First = T(11, 4), Worked = Min(39) }) && h[day.Date].Worked == Min(65), "merge survives wipe");
 
         // Week: Mon Sep 7 .. Sun Sep 13; the Sunday before must not count
         var mon = new DateTime(2026, 9, 7);
@@ -113,10 +112,11 @@ static class Calc
         var none = Compute([], null, 0, false, T(9, 0), DefaultDaily);
         Check(none.Worked == TimeSpan.Zero && none.Idle == TimeSpan.Zero && none.Left == DefaultDaily, "empty");
 
-        // Idle limit learning
-        Check(LearnLimit(T(11, 4).AddSeconds(30), T(11, 0)) == 5, "learn 5");
-        Check(LearnLimit(T(11, 0).AddSeconds(20), T(11, 0)) == null, "manual stop not learned");
-        Check(WarnAt(null) == Min(3) && WarnAt(10) == Min(8) && WarnAt(2) == Min(1), "warn at");
+        // Idle minutes while running are not counted (tracker removes them on idle stop)
+        Check(LiveMinutes(49, true, TimeSpan.FromSeconds(9 * 60 + 40)) == 40, "live minus idle");
+        Check(LiveMinutes(49, true, TimeSpan.FromSeconds(50)) == 49, "short idle kept");
+        Check(LiveMinutes(3, true, Min(9)) == 0 && LiveMinutes(49, false, Min(9)) == 49, "live clamp / stopped");
+        Check(WarnAt == Min(8), "warn at");
         Check(Signed(Min(-65)) == "−1:05" && Signed(Min(12)) == "+0:12" && Hm(Min(2550)) == "42:30", "format");
     }
 
