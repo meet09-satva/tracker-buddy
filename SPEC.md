@@ -16,8 +16,9 @@ Companion widget for Satva Time Tracker 2.7. Read-only: never writes to the trac
 
 ## Rules (refresh every 30 s)
 - **Running** = newest Persistance file written within the last 2 min.
-- **Worked** = Σ today's logs of `max(End − Start, Minutes if log is the persisted one)`. While running, whole minutes
-  of current no-input are taken off `Minutes`: on idle stop the tracker sets `End = Start + (seconds − idle seconds)`.
+- **Worked** = Σ today's logs of `max(End − Start, live minutes if log is the persisted one)`. While running, live =
+  (now − Start) minus whole minutes of current no-input: persist `Minutes` runs ~1.7% fast (bumped every 59 ticks),
+  and on idle stop the tracker sets `End = Start + (seconds − idle seconds)`. Stopped: live = persist `Minutes`.
 - **Left** = max(0, daily − Worked). **Finish at** = now + Left (keeps moving while stopped).
 - **Idle** = (now − first start today) − Worked, i.e. every gap when the tracker was off.
 - **Week** = Σ history rows Mon–Sun vs. this week's required hours (daily target stays fixed).

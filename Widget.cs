@@ -144,9 +144,10 @@ class Widget : Form
                 minutes = (int?)x.Element("Minutes") ?? 0;
             }
             var running = IsRunning(persist, now);
-            minutes = Calc.LiveMinutes(minutes, running, IdleNow());
-
             var logs = ReadLogs(userId, now.Date.AddDays(-7));
+            var runLog = running ? logs.Find(l => l.Id == logId) : null;
+            minutes = Calc.LiveMinutes(minutes, now - runLog?.Start, IdleNow());
+
             var history = History.Load();
             var changed = false;
             foreach (var g in logs.GroupBy(l => l.Start.Date))

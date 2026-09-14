@@ -56,10 +56,12 @@ static class Calc
     public static readonly TimeSpan IdleLimit = TimeSpan.FromMinutes(10);
     public static readonly TimeSpan WarnAt = IdleLimit - TimeSpan.FromMinutes(2);
 
-    // On idle stop the tracker ends the log where idle began, so the persist minutes counted during idle are dropped.
-    // Leave them out while running; they come back if input returns before the limit.
-    public static int LiveMinutes(int persistMinutes, bool running, TimeSpan idle) =>
-        running ? Math.Max(0, persistMinutes - (int)idle.TotalMinutes) : persistMinutes;
+    // Persist Minutes runs fast (the tracker bumps it every 59 ticks), so time the running log by the clock instead,
+    // like the tracker's own Start + Seconds. On idle stop the tracker ends the log where idle began, so whole idle
+    // minutes are left out while running; they come back if input returns before the limit.
+    // Not running: keep persist minutes (the tracker adds them to the log on its next launch).
+    public static int LiveMinutes(int persistMinutes, TimeSpan? runningFor, TimeSpan idle) =>
+        runningFor is TimeSpan r ? Math.Max(0, (int)r.TotalMinutes - (int)idle.TotalMinutes) : persistMinutes;
 
     public static string Hm(TimeSpan t) => $"{(int)t.TotalHours}:{t.Minutes:00}";
 
@@ -113,9 +115,11 @@ static class Calc
         Check(none.Worked == TimeSpan.Zero && none.Idle == TimeSpan.Zero && none.Left == DefaultDaily, "empty");
 
         // Idle minutes while running are not counted (tracker removes them on idle stop)
-        Check(LiveMinutes(49, true, TimeSpan.FromSeconds(9 * 60 + 40)) == 40, "live minus idle");
-        Check(LiveMinutes(49, true, TimeSpan.FromSeconds(50)) == 49, "short idle kept");
-        Check(LiveMinutes(3, true, Min(9)) == 0 && LiveMinutes(49, false, Min(9)) == 49, "live clamp / stopped");
+        // Running log timed by the clock: 16:46 → 19:21:35 is 155 min though persist said 158 (log 11520, 2026-09-14)
+        var ranFor = new DateTime(2026, 9, 14, 19, 21, 35) - new DateTime(2026, 9, 14, 16, 46, 0);
+        Check(LiveMinutes(158, ranFor, TimeSpan.FromSeconds(20)) == 155, "clock not persist");
+        Check(LiveMinutes(99, Min(49), TimeSpan.FromSeconds(9 * 60 + 40)) == 40, "live minus idle");
+        Check(LiveMinutes(99, Min(3), Min(9)) == 0 && LiveMinutes(49, null, Min(9)) == 49, "live clamp / stopped");
         Check(WarnAt == Min(8), "warn at");
         Check(Signed(Min(-65)) == "−1:05" && Signed(Min(12)) == "+0:12" && Hm(Min(2550)) == "42:30", "format");
     }
