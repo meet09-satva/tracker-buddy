@@ -11,6 +11,8 @@ class Settings
     public int Hotkey { get; set; } = (int)(Keys.Control | Keys.Alt | Keys.B);
     public bool IdleWarning { get; set; } = true;
     public bool OffAlert { get; set; } = true;
+    public bool MergeManual { get; set; } = false; // pull portal manual logs via the tracker's token
+    public bool ShowWeeklyBar { get; set; } = true; // card row; week view (calendar icon) always available regardless
 
     static readonly string JsonPath = Path.Combine(History.Dir, "settings.json");
 

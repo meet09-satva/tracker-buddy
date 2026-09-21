@@ -21,9 +21,10 @@ static class Calc
         return db > live ? db : live;
     }
 
-    public static Status Compute(IReadOnlyList<Log> logs, int? persistLogId, int persistMinutes, bool running, DateTime now, TimeSpan target)
+    // manual = portal-entered time for this day (not in the local DB); it counts as worked and fills gaps.
+    public static Status Compute(IReadOnlyList<Log> logs, int? persistLogId, int persistMinutes, bool running, DateTime now, TimeSpan target, TimeSpan manual = default)
     {
-        var worked = TimeSpan.Zero;
+        var worked = manual;
         foreach (var l in logs) worked += Dur(l, persistLogId, persistMinutes);
         var left = worked >= target ? TimeSpan.Zero : target - worked;
         var idle = logs.Count == 0 ? TimeSpan.Zero : now - logs.Min(l => l.Start) - worked;
@@ -81,6 +82,10 @@ static class Calc
         Check(s.Idle == Min(32), "idle"); // 102 min span - 70 worked
         Check(Compute(today, 3, 39, true, T(11, 45), Min(480)).FinishAt == T(18, 35), "custom daily target");
 
+        // Manual portal minutes add to worked (fills a gap, so idle shrinks; clamped at zero)
+        var man = Compute(today, 3, 39, true, T(11, 45), DefaultDaily, Min(40));
+        Check(man.Worked == Min(110) && man.Left == Min(400) && man.Idle == TimeSpan.Zero, "manual merge");
+
         // History row: last activity 11:43 (11:04 + 39 live), 100 min span - 70 worked
         var day = Summarize(today, 3, 39);
         Check(day.First == T(10, 3) && day.Last == T(11, 43) && day.Worked == Min(70) && day.Idle == Min(30), "summary");
@@ -122,6 +127,8 @@ static class Calc
         Check(LiveMinutes(99, Min(3), Min(9)) == 0 && LiveMinutes(49, null, Min(9)) == 49, "live clamp / stopped");
         Check(WarnAt == Min(8), "warn at");
         Check(Signed(Min(-65)) == "−1:05" && Signed(Min(12)) == "+0:12" && Hm(Min(2550)) == "42:30", "format");
+
+        ManualLogs.SelfTest();
     }
 
     static void Check(bool ok, string name)

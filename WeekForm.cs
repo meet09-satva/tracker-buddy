@@ -6,7 +6,8 @@ class WeekForm : Form
         Sub = Color.FromArgb(160, 160, 172), Good = Color.FromArgb(108, 203, 95), Bad = Color.FromArgb(255, 120, 120);
 
     // ponytail: current week only, add prev/next buttons when older weeks matter
-    public WeekForm(Dictionary<DateTime, Day> days, Settings settings)
+    // manual = portal-entered minutes per day (not in history); added to worked, fills gaps like the card.
+    public WeekForm(Dictionary<DateTime, Day> days, Settings settings, Dictionary<DateTime, TimeSpan>? manual = null)
     {
         var today = DateTime.Today;
         var monday = Calc.Monday(today);
@@ -15,7 +16,7 @@ class WeekForm : Form
         Text = $"Tracker Buddy — week of {monday:MMM d}";
         Icon = Widget.AppIcon;
         Font = new Font("Segoe UI", 10f);
-        ClientSize = new Size(670, 262);
+        ClientSize = new Size(590, 262);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Bg;
 
@@ -32,33 +33,36 @@ class WeekForm : Form
         };
         lv.DrawItem += (_, e) => e.DrawDefault = true;
         lv.DrawSubItem += (_, e) => e.DrawDefault = true;
-        foreach (var (name, width) in new[] { ("Day", 160), ("First start", 95), ("Last stop", 95), ("Worked", 120), ("Idle", 80), ($"vs {Calc.Hm(daily)}", 110) })
+        foreach (var (name, width) in new[] { ("Day", 160), ("First start", 95), ("Last stop", 95), ("Worked", 120), ($"vs {Calc.Hm(daily)}", 110) })
             lv.Columns.Add(name, width);
 
-        TimeSpan worked = default, idle = default;
+        TimeSpan worked = default;
         for (var i = 0; i < 7; i++)
         {
             var d = monday.AddDays(i);
             var label = d.ToString("ddd, MMM d") + (d == today ? " (today)" : "");
-            if (!days.TryGetValue(d, out var day))
+            var man = manual != null && manual.TryGetValue(d, out var mm) ? mm : TimeSpan.Zero;
+            var has = days.TryGetValue(d, out var day);
+            if (!has && man == TimeSpan.Zero)
             {
-                lv.Items.Add(new ListViewItem(new[] { label, "—", "—", "—", "—", "" }) { ForeColor = Sub });
+                lv.Items.Add(new ListViewItem(new[] { label, "—", "—", "—", "" }) { ForeColor = Sub });
                 continue;
             }
-            var diff = day.Worked - daily;
-            worked += day.Worked;
-            idle += day.Idle;
-            var item = new ListViewItem(new[] { label, day.First.ToString("h:mm tt"), day.Last.ToString("h:mm tt"), Calc.Hm(day.Worked), Calc.Hm(day.Idle), Calc.Signed(diff) })
+            var dayWorked = (has ? day.Worked : TimeSpan.Zero) + man;
+            var diff = dayWorked - daily;
+            worked += dayWorked;
+            var workedText = Calc.Hm(dayWorked) + (man > TimeSpan.Zero ? $" (+{(int)man.TotalMinutes}m)" : "");
+            var item = new ListViewItem(new[] { label, has ? day.First.ToString("h:mm tt") : "—", has ? day.Last.ToString("h:mm tt") : "—", workedText, Calc.Signed(diff) })
             { UseItemStyleForSubItems = false };
-            item.SubItems[5].ForeColor = diff < TimeSpan.Zero ? Bad : Good;
+            item.SubItems[4].ForeColor = diff < TimeSpan.Zero ? Bad : Good;
             lv.Items.Add(item);
         }
 
         var left = required - worked;
-        var total = new ListViewItem(new[] { "Week", "", "", $"{Calc.Hm(worked)} / {Calc.Hm(required)}", Calc.Hm(idle), left > TimeSpan.Zero ? $"{Calc.Hm(left)} left" : $"+{Calc.Hm(-left)} over" })
+        var total = new ListViewItem(new[] { "Week", "", "", $"{Calc.Hm(worked)} / {Calc.Hm(required)}", left > TimeSpan.Zero ? $"{Calc.Hm(left)} left" : $"+{Calc.Hm(-left)} over" })
         { Font = new Font(Font, FontStyle.Bold), UseItemStyleForSubItems = false };
         foreach (ListViewItem.ListViewSubItem sub in total.SubItems) sub.Font = total.Font;
-        total.SubItems[5].ForeColor = left > TimeSpan.Zero ? Bad : Good;
+        total.SubItems[4].ForeColor = left > TimeSpan.Zero ? Bad : Good;
         lv.Items.Add(total);
         Controls.Add(lv);
     }

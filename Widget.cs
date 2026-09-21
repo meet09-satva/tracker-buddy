@@ -10,7 +10,7 @@ class Widget : Form
 {
     const string TrackerDir = @"C:\Program Files (x86)\Satva\TimeTracker";
     const string ConnStr = @"Server=(localdb)\MSSQLLocalDB;Database=Time_Tracker;Integrated Security=true;Encrypt=false;Connect Timeout=10;Application Name=TrackerBuddy";
-    const int W = 310, PillH = 38, CardH = 172, P = 14;
+    const int W = 310, PillH = 38, CardH = 172, WeekRowH = 38, P = 14;
 
     public static readonly Icon AppIcon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!) ?? SystemIcons.Application;
 
@@ -37,11 +37,17 @@ class Widget : Form
         updateTimer = new() { Interval = 6 * 60 * 60 * 1000 };
     readonly Settings settings = Settings.Load();
     Status? last;
-    TimeSpan weekWorked;
+    TimeSpan weekWorked, manualToday;
+    Dictionary<DateTime, TimeSpan> manual = new();
+    DateTime manualAt;
+    bool manualBusy;
+    // Manual logs change rarely (a user adds a few a day), so poll the portal gently. Startup, toggling
+    // the setting on, and the tray Refresh each fetch immediately (they leave manualAt unset).
+    static readonly TimeSpan ManualEvery = TimeSpan.FromMinutes(30);
     string? warn, error;
     bool idleWarned, wasRunning, warned, doneAlerted, expanded, dragged, settingsOpen;
     DateTime alertDay;
-    DateTime? offAlertAt;
+    DateTime? offAlertAt, offSince;
     Point dragFrom;
     Rectangle gearRect, weekRect;
     WeekForm? week;
@@ -65,7 +71,7 @@ class Widget : Form
         menu.Items.Add("Week view", null, (_, _) => OpenWeek());
         menu.Items.Add("Settings…", null, (_, _) => OpenSettings());
         menu.Items.Add(toggleItem);
-        menu.Items.Add("Refresh", null, (_, _) => Refresh_());
+        menu.Items.Add("Refresh", null, (_, _) => { manualAt = default; Refresh_(); }); // force manual re-fetch on demand
         menu.Items.Add("Check for updates", null, async (_, _) => await Updater.CheckAsync(tray, manual: true));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => { tray.Visible = false; Application.Exit(); });
@@ -154,8 +160,15 @@ class Widget : Form
                 changed |= History.Merge(history, Calc.Summarize(g.ToList(), logId, minutes));
             if (changed) History.Save(history);
 
-            last = Calc.Compute(logs.Where(l => l.Start.Date == now.Date).ToList(), logId, minutes, running, now, settings.Daily());
-            weekWorked = Calc.WeekWorked(history.Values, Calc.Monday(now));
+            if (!settings.MergeManual) manual.Clear();
+            else if (userId is int uid && !manualBusy && now - manualAt > ManualEvery)
+                _ = FetchManualAsync(uid, now.Date.AddDays(-7), now.Date);
+            manualToday = manual.TryGetValue(now.Date, out var mt) ? mt : TimeSpan.Zero;
+
+            last = Calc.Compute(logs.Where(l => l.Start.Date == now.Date).ToList(), logId, minutes, running, now, settings.Daily(), manualToday);
+            var mon = Calc.Monday(now);
+            weekWorked = Calc.WeekWorked(history.Values, mon)
+                + manual.Where(kv => kv.Key >= mon && kv.Key < mon.AddDays(7)).Aggregate(TimeSpan.Zero, (acc, kv) => acc + kv.Value);
             error = null;
             tray.Text = $"Today {Calc.Hm(last.Worked)}/{Calc.Hm(settings.Daily())} · Week {Calc.Hm(weekWorked)}/{Calc.Hm(WeekRequired())} · Idle {Calc.Hm(last.Idle)}";
             Alerts(last, now);
@@ -168,6 +181,20 @@ class Widget : Form
     }
 
     TimeSpan WeekRequired() => settings.WeeklyFor(Calc.Monday(DateTime.Now));
+
+    // Manual logs live only on the portal; fetch them off the UI thread and repaint when they land.
+    // manualAt is set up front so a slow or failed call doesn't retry on every 30 s tick.
+    async Task FetchManualAsync(int userId, DateTime from, DateTime to)
+    {
+        manualBusy = true;
+        manualAt = DateTime.Now;
+        try
+        {
+            var fetched = await ManualLogs.ByDayAsync(userId, from, to);
+            if (fetched.Count > 0 || manual.Count > 0) { manual = fetched; Refresh_(); }
+        }
+        finally { manualBusy = false; }
+    }
 
     static List<Log> ReadLogs(int? userId, DateTime from)
     {
@@ -198,15 +225,21 @@ class Widget : Form
         if (running != wasRunning) { wasRunning = running; Refresh_(); }
 
         // Working but the tracker is off: you're at the keyboard, today's target isn't met, the tracker isn't running.
-        if (running) offAlertAt = null;
-        else if (settings.OffAlert && idle < TimeSpan.FromSeconds(30) && last != null && last.Left > TimeSpan.Zero
-                 && (offAlertAt is null || now - offAlertAt > TimeSpan.FromMinutes(10)))
+        // Require the off state to hold for a bit — the tracker can take a few seconds to restart its persist file
+        // after its own idle-stop, and a single stale tick there would otherwise look like "off".
+        if (running) { offAlertAt = null; offSince = null; }
+        else if (settings.OffAlert && idle < TimeSpan.FromSeconds(30) && last != null && last.Left > TimeSpan.Zero)
         {
-            offAlertAt = now;
-            Visible = true;
-            SystemSounds.Asterisk.Play();
-            tray.ShowBalloonTip(8_000, "Time Tracker is off", "You're working but the tracker isn't running. Start it so this time counts.", ToolTipIcon.Warning);
+            offSince ??= now;
+            if (now - offSince > TimeSpan.FromSeconds(20) && (offAlertAt is null || now - offAlertAt > TimeSpan.FromMinutes(10)))
+            {
+                offAlertAt = now;
+                Visible = true;
+                SystemSounds.Asterisk.Play();
+                tray.ShowBalloonTip(8_000, "Time Tracker is off", "You're working but the tracker isn't running. Start it so this time counts.", ToolTipIcon.Warning);
+            }
         }
+        else offSince = null;
 
         var warnAt = Calc.WarnAt;
         string? w = null;
@@ -256,11 +289,18 @@ class Widget : Form
         if (!ClientRectangle.Contains(PointToClient(Cursor.Position))) SetExpanded(false);
     }
 
+    int CardHeight => settings.ShowWeeklyBar ? CardH : CardH - WeekRowH;
+
     void SetExpanded(bool on)
     {
         if (expanded == on) return;
         expanded = on;
-        var h = on ? CardH : PillH;
+        Resize_();
+    }
+
+    void Resize_()
+    {
+        var h = expanded ? CardHeight : PillH;
         var wa = Screen.FromControl(this).WorkingArea;
         SetBounds(Left, Math.Max(wa.Top, Bottom - h), W, h); // grow upward, keep the bottom edge
         Invalidate();
@@ -303,6 +343,7 @@ class Widget : Form
         {
             settings.Save();
             RegisterHotkey();
+            if (expanded) Resize_();
             Refresh_();
         }
         settingsOpen = false;
@@ -311,7 +352,7 @@ class Widget : Form
     void OpenWeek()
     {
         if (week is { IsDisposed: false }) { week.Activate(); return; }
-        week = new WeekForm(History.Load(), settings);
+        week = new WeekForm(History.Load(), settings, manual);
         week.Show();
     }
 
@@ -365,16 +406,22 @@ class Widget : Form
         DrawRight(g, s.Left == TimeSpan.Zero ? "today" : $"finish · {Calc.Hm(s.Left)} left", Small, Sub, W - P, 62, 18);
         Bar(g, new Rectangle(P, 88, W - 2 * P, 6), Ratio(s.Worked, daily), c);
 
-        // Week
-        var required = WeekRequired();
-        var weekLeft = required - weekWorked;
-        Draw(g, "This week", Small, Sub, P, 102, 18);
-        DrawRight(g, $"{Calc.Hm(weekWorked)} / {Calc.Hm(required)} · " + (weekLeft > TimeSpan.Zero ? $"{Calc.Hm(weekLeft)} left" : "done ✔"), Small, Fg, W - P, 102, 18);
-        Bar(g, new Rectangle(P, 124, W - 2 * P, 6), Ratio(weekWorked, required), Accent);
+        // Week (opt-in row; week view via the calendar icon always works regardless)
+        var footerY = 140;
+        if (settings.ShowWeeklyBar)
+        {
+            var required = WeekRequired();
+            var weekLeft = required - weekWorked;
+            Draw(g, "This week", Small, Sub, P, 102, 18);
+            DrawRight(g, $"{Calc.Hm(weekWorked)} / {Calc.Hm(required)} · " + (weekLeft > TimeSpan.Zero ? $"{Calc.Hm(weekLeft)} left" : "done ✔"), Small, Fg, W - P, 102, 18);
+            Bar(g, new Rectangle(P, 124, W - 2 * P, 6), Ratio(weekWorked, required), Accent);
+        }
+        else footerY -= WeekRowH;
 
         // Footer
-        Draw(g, $"Idle today {Calc.Hm(s.Idle)}", Small, Sub, P, 140, 22);
-        DrawRight(g, $"{Settings.Describe((Keys)settings.Hotkey)} to hide", Small, Faint, W - P, 140, 22);
+        var footer = $"Idle today {Calc.Hm(s.Idle)}" + (manualToday > TimeSpan.Zero ? $"  ·  +{(int)manualToday.TotalMinutes}m manual" : "");
+        Draw(g, footer, Small, Sub, P, footerY, 22);
+        DrawRight(g, $"{Settings.Describe((Keys)settings.Hotkey)} to hide", Small, Faint, W - P, footerY, 22);
     }
 
     static int Draw(Graphics g, string text, Font f, Color c, int x, int y, int rowH)

@@ -52,8 +52,12 @@ class SettingsForm : Form
         Row("Show / hide widget", hk);
         var idle = Check("Warn me before the tracker's idle stop", s.IdleWarning);
         var off = Check("Alert me when I'm working but the tracker is off", s.OffAlert);
+        var manual = Check("Merge manual timesheet logs from the portal", s.MergeManual);
+        var weekBar = Check("Show weekly progress in the card (calendar icon always opens week view)", s.ShowWeeklyBar);
         Span(idle);
         Span(off);
+        Span(manual);
+        Span(weekBar);
 
         var save = Btn("Save", Accent);
         var cancel = Btn("Cancel", Field);
@@ -68,6 +72,8 @@ class SettingsForm : Form
             s.Hotkey = (int)hotkey;
             s.IdleWarning = idle.Checked;
             s.OffAlert = off.Checked;
+            s.MergeManual = manual.Checked;
+            s.ShowWeeklyBar = weekBar.Checked;
             DialogResult = DialogResult.OK;
         };
         var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Fill, Margin = new Padding(0, 16, 0, 0) };
