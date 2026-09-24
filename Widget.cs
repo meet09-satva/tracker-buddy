@@ -71,6 +71,10 @@ class Widget : Form
         menu.Items.Add("Week view", null, (_, _) => OpenWeek());
         menu.Items.Add("Settings…", null, (_, _) => OpenSettings());
         menu.Items.Add(toggleItem);
+        var halfItem = new ToolStripMenuItem("Half day today") { CheckOnClick = true };
+        halfItem.Click += (_, _) => { settings.SetHalfDay(DateTime.Today, halfItem.Checked); settings.Save(); Refresh_(); };
+        menu.Opening += (_, _) => halfItem.Checked = settings.HalfDay(DateTime.Today);
+        menu.Items.Add(halfItem);
         menu.Items.Add("Refresh", null, (_, _) => { manualAt = default; Refresh_(); }); // force manual re-fetch on demand
         menu.Items.Add("Check for updates", null, async (_, _) => await Updater.CheckAsync(tray, manual: true));
         menu.Items.Add(new ToolStripSeparator());
@@ -150,9 +154,13 @@ class Widget : Form
                 minutes = (int?)x.Element("Minutes") ?? 0;
             }
             var running = IsRunning(persist, now);
-            var logs = ReadLogs(userId, now.Date.AddDays(-7));
-            var runLog = running ? logs.Find(l => l.Id == logId) : null;
+            var from = now.Date.AddDays(-7);
+            var dbLogs = ReadLogs(userId, from);
+            var runLog = running ? dbLogs.Find(l => l.Id == logId) : null;
             minutes = Calc.LiveMinutes(minutes, now - runLog?.Start, IdleNow());
+            var cache = History.LoadLogs();
+            if (History.Remember(cache, dbLogs, logId, minutes)) History.SaveLogs(cache, from);
+            var logs = History.Union(cache.Where(kv => kv.Key >= from).ToDictionary(), dbLogs);
 
             var history = History.Load();
             var changed = false;
@@ -165,12 +173,12 @@ class Widget : Form
                 _ = FetchManualAsync(uid, now.Date.AddDays(-7), now.Date);
             manualToday = manual.TryGetValue(now.Date, out var mt) ? mt : TimeSpan.Zero;
 
-            last = Calc.Compute(logs.Where(l => l.Start.Date == now.Date).ToList(), logId, minutes, running, now, settings.Daily(), manualToday);
+            last = Calc.Compute(logs.Where(l => l.Start.Date == now.Date).ToList(), logId, minutes, running, now, settings.Daily(DateTime.Today), manualToday);
             var mon = Calc.Monday(now);
             weekWorked = Calc.WeekWorked(history.Values, mon)
                 + manual.Where(kv => kv.Key >= mon && kv.Key < mon.AddDays(7)).Aggregate(TimeSpan.Zero, (acc, kv) => acc + kv.Value);
             error = null;
-            tray.Text = $"Today {Calc.Hm(last.Worked)}/{Calc.Hm(settings.Daily())} · Week {Calc.Hm(weekWorked)}/{Calc.Hm(WeekRequired())} · Idle {Calc.Hm(last.Idle)}";
+            tray.Text = $"Today {Calc.Hm(last.Worked)}/{Calc.Hm(settings.Daily(DateTime.Today))} · Week {Calc.Hm(weekWorked)}/{Calc.Hm(WeekRequired())} · Idle {Calc.Hm(last.Idle)}";
             Alerts(last, now);
         }
         catch (Exception ex)
@@ -270,12 +278,12 @@ class Widget : Form
         if (!warned && s.Left > TimeSpan.Zero && s.Left <= TimeSpan.FromMinutes(15))
         {
             warned = true;
-            tray.ShowBalloonTip(10_000, "15 minutes left", $"Your {Calc.Hm(settings.Daily())} completes at {s.FinishAt:h:mm tt}", ToolTipIcon.Info);
+            tray.ShowBalloonTip(10_000, "15 minutes left", $"Your {Calc.Hm(settings.Daily(DateTime.Today))} completes at {s.FinishAt:h:mm tt}", ToolTipIcon.Info);
         }
         if (!doneAlerted && s.Left == TimeSpan.Zero)
         {
             doneAlerted = warned = true;
-            tray.ShowBalloonTip(10_000, $"{Calc.Hm(settings.Daily())} hours complete ✔", $"Worked {Calc.Hm(s.Worked)} · Idle {Calc.Hm(s.Idle)}", ToolTipIcon.Info);
+            tray.ShowBalloonTip(10_000, $"{Calc.Hm(settings.Daily(DateTime.Today))} hours complete ✔", $"Worked {Calc.Hm(s.Worked)} · Idle {Calc.Hm(s.Idle)}", ToolTipIcon.Info);
         }
     }
 
@@ -379,7 +387,7 @@ class Widget : Form
         var x = P + 14;
         if (warn != null) { Draw(g, warn, Bold, Red, x, 0, PillH); return; }
         x = Draw(g, Calc.Hm(s.Worked), Bold, Fg, x, 0, PillH) + 8;
-        Bar(g, new Rectangle(x, PillH / 2 - 3, 64, 6), Ratio(s.Worked, settings.Daily()), c);
+        Bar(g, new Rectangle(x, PillH / 2 - 3, 64, 6), Ratio(s.Worked, settings.Daily(DateTime.Today)), c);
         x += 64 + 9;
         var (finish, fc) = s.Left == TimeSpan.Zero ? ("done ✔", Blue) : s.Running ? ($"→ {s.FinishAt:h:mm tt}", Fg) : ($"⏸ {s.FinishAt:h:mm tt}", Orange);
         x = Draw(g, finish, Body, fc, x, 0, PillH) + 6;
@@ -388,11 +396,12 @@ class Widget : Form
 
     void PaintCard(Graphics g, Status s, Color c)
     {
-        var daily = settings.Daily();
+        var daily = settings.Daily(DateTime.Today);
 
         // Status line + icon buttons
         Dot(g, P + 5, 22, 5, c);
         var status = warn ?? (s.Left == TimeSpan.Zero ? "Daily target done" : s.Running ? "Running" : "Stopped — start the tracker");
+        if (warn == null && settings.HalfDay(DateTime.Today)) status += " · half day";
         Draw(g, status, Bold, warn != null ? Red : s.Running || s.Left == TimeSpan.Zero ? Fg : Orange, P + 16, 10, 24);
         gearRect = new Rectangle(W - P - 24, 10, 24, 24);
         weekRect = new Rectangle(W - P - 54, 10, 24, 24);

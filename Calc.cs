@@ -14,7 +14,7 @@ static class Calc
     public static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(2);
 
     // DB EndDateTime of the running log lags until stop; the persist file has its live minutes.
-    static TimeSpan Dur(Log l, int? persistLogId, int persistMinutes)
+    public static TimeSpan Dur(Log l, int? persistLogId, int persistMinutes)
     {
         var db = l.End - l.Start;
         var live = l.Id == persistLogId ? TimeSpan.FromMinutes(persistMinutes) : TimeSpan.Zero;
@@ -96,6 +96,17 @@ static class Calc
         Check(History.Merge(h, day with { Worked = Min(65) }) && h[day.Date].Worked == Min(65), "merge takes db correction");
         Check(!History.Merge(h, day with { First = T(11, 4), Worked = Min(39) }) && h[day.Date].Worked == Min(65), "merge survives wipe");
 
+        // Logout wipes the DB (Settings.btnLogout_Click → DeleteAllRecord); cached logs keep the morning.
+        // Cached-only rows get Id 0 so they never pick up the new running log's persist minutes.
+        var cache = new Dictionary<DateTime, DateTime>();
+        History.Remember(cache, today, 3, 39);
+        Check(cache[T(11, 4)] == T(11, 43), "cache stores live end");
+        var afterLogin = new List<Log> { new(3, T(13, 0), T(13, 0)) }; // reseeded id collides with an old one
+        var merged = History.Union(cache, afterLogin);
+        Check(merged.Count == 4 && merged.Single(l => l.Start == T(11, 4)).Id == 0, "union keeps wiped logs");
+        Check(Compute(merged, 3, 20, true, T(13, 20), DefaultDaily).Worked == Min(90), "morning + afternoon"); // 70 + 20
+        Check(History.Union(cache, today).Count == 3, "db row wins over cache");
+
         // Week: Mon Sep 7 .. Sun Sep 13; the Sunday before must not count
         var mon = new DateTime(2026, 9, 7);
         Check(Monday(T(10, 0)) == mon && Monday(mon) == mon && Monday(new DateTime(2026, 9, 13, 23, 0, 0)) == mon, "monday");
@@ -106,6 +117,13 @@ static class Calc
         var st = new Settings();
         st.WeekOverrides[Settings.Key(mon)] = 40 * 60;
         Check(st.WeeklyFor(mon) == Min(2400) && st.WeeklyFor(mon.AddDays(7)) == Min(2550), "week override");
+
+        // Half day: 4:30 target, default week shrinks by the cut, explicit week override untouched
+        st.SetHalfDay(mon.AddDays(8), true);
+        Check(st.Daily(mon.AddDays(8)) == Min(270) && st.Daily(mon.AddDays(9)) == Min(510), "half day target");
+        Check(st.WeeklyFor(mon.AddDays(7)) == Min(2310), "half day week");
+        st.SetHalfDay(mon.AddDays(1), true);
+        Check(st.WeeklyFor(mon) == Min(2400), "half day keeps week override");
 
         // After stop the DB end is updated; must not double count with the persist minutes
         today[2] = new(3, T(11, 4), T(11, 43));

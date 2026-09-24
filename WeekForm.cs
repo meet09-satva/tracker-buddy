@@ -40,7 +40,7 @@ class WeekForm : Form
         for (var i = 0; i < 7; i++)
         {
             var d = monday.AddDays(i);
-            var label = d.ToString("ddd, MMM d") + (d == today ? " (today)" : "");
+            var label = d.ToString("ddd, MMM d") + (d == today ? " (today)" : "") + (settings.HalfDay(d) ? " ½" : "");
             var man = manual != null && manual.TryGetValue(d, out var mm) ? mm : TimeSpan.Zero;
             var has = days.TryGetValue(d, out var day);
             if (!has && man == TimeSpan.Zero)
@@ -49,7 +49,7 @@ class WeekForm : Form
                 continue;
             }
             var dayWorked = (has ? day.Worked : TimeSpan.Zero) + man;
-            var diff = dayWorked - daily;
+            var diff = dayWorked - settings.Daily(d);
             worked += dayWorked;
             var workedText = Calc.Hm(dayWorked) + (man > TimeSpan.Zero ? $" (+{(int)man.TotalMinutes}m)" : "");
             var item = new ListViewItem(new[] { label, has ? day.First.ToString("h:mm tt") : "—", has ? day.Last.ToString("h:mm tt") : "—", workedText, Calc.Signed(diff) })
